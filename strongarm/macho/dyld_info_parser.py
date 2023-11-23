@@ -274,7 +274,7 @@ class DyldInfoParser:
                     rebase_target = chained_rebase_ptr.target
                 else:
                     raise NotImplementedError(f"Unsupported chained pointer format: {pointer_format}")
-
+                binary.chained_fixups_type = pointer_format
                 rebased_pointers[VirtualMemoryPointer(chain_base + virtual_base)] = VirtualMemoryPointer(rebase_target)
                 chain_base += chained_rebase_ptr.next * 4
 
@@ -308,7 +308,7 @@ class DyldInfoParser:
     @staticmethod
     def parse_dyld_info(binary: MachoBinary) -> Dict[VirtualMemoryPointer, DyldBoundSymbol]:
         if not binary.dyld_info:
-            raise ValueError("This method expects the provided binary to contain LC_DYLD_INFO")
+            return;
 
         return {
             **DyldInfoParser._parse_dyld_bytestream(binary, binary.dyld_info.bind_off, binary.dyld_info.bind_size),

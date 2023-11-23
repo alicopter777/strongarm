@@ -16,7 +16,7 @@ from strongarm.logger import strongarm_logger
 from strongarm.macho.arch_independent_structs import CFString32, CFString64, CFStringStruct
 from strongarm.macho.dyld_info_parser import DyldBoundSymbol
 from strongarm.macho.macho_binary import InvalidAddressError, MachoBinary
-from strongarm.macho.macho_definitions import VirtualMemoryPointer
+from strongarm.macho.macho_definitions import VirtualMemoryPointer, StaticFilePointer
 from strongarm.macho.macho_imp_stubs import MachoImpStubsParser
 from strongarm.macho.macho_string_table_helper import MachoStringTableHelper
 from strongarm.macho.objc_runtime_data_parser import (
@@ -165,7 +165,7 @@ class MachoAnalyzer:
         self.crossref_helper = MachoStringTableHelper(binary)
         self.imported_symbols = self.crossref_helper.imported_symbols
 
-        self.imp_stubs = MachoImpStubsParser(binary, self.cs).imp_stubs
+        # self.imp_stubs = MachoImpStubsParser(binary, self.cs).imp_stubs
         self._objc_helper: Optional[ObjcRuntimeDataParser] = None
         self._objc_method_list: List[ObjcMethodInfo] = []
 
@@ -179,8 +179,8 @@ class MachoAnalyzer:
         with self._db_handle:
             cursor.close()
 
-        self._build_callable_symbol_index()
-        self._build_function_boundaries_index()
+#        self._build_callable_symbol_index()
+#        self._build_function_boundaries_index()
 
         self._cfstring_to_stringref_map = self._build_cfstring_map()
         self._cstring_to_stringref_map = self._build_cstring_map()
@@ -427,6 +427,10 @@ class MachoAnalyzer:
     def objc_classes(self) -> List[ObjcClass]:
         """Return the List of classes and categories implemented within the binary."""
         return self.objc_helper.classes
+    
+    def objc_selectors(self):
+        """Return list of selectors"""
+        return self.objc_helper.selectors
 
     def objc_categories(self) -> List[ObjcCategory]:
         """Return the List of categories implemented within the app."""
@@ -861,4 +865,13 @@ class MachoAnalyzer:
             strings_content = self.binary.get_bytes(string_section.offset, string_section.size)
             transformed_strings = MachoStringTableHelper.transform_string_section(list(strings_content))
             discovered_strings = set((x.full_string for x in transformed_strings.values()))
+        return discovered_strings
+
+    def string_to_string_offset_map_from_section(self, section_name: str, segment_name: str = "__TEXT") -> Dict[str, StaticFilePointer]:
+        discovered_strings = {}
+        string_section = self.binary.section_with_name(section_name, segment_name)
+        if string_section:
+            strings_content = self.binary.get_bytes(string_section.offset, string_section.size)
+            transformed_strings = MachoStringTableHelper.transform_string_section(list(strings_content))
+            discovered_strings = {string.full_string: string.start_idx for string in transformed_strings.values()}
         return discovered_strings

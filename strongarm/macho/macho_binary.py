@@ -160,6 +160,7 @@ class MachoBinary:
         self._dyld_export_trie: Optional[MachoLinkeditDataCommandStruct] = None
         self._dyld_chained_fixups: Optional[MachoLinkeditDataCommandStruct] = None
         self.load_dylib_commands: List[DylibCommandStruct] = []
+        self.reexport_load_dylib_commands: List[DylibCommandStruct] = []
         self._code_signature_cmd: Optional[MachoLinkeditDataCommandStruct] = None
         self._function_starts_cmd: Optional[MachoLinkeditDataCommandStruct] = None
         self._functions_list: Optional[Set[VirtualMemoryPointer]] = None
@@ -185,7 +186,7 @@ class MachoBinary:
 
         self.dyld_bound_symbols: Dict[VirtualMemoryPointer, DyldBoundSymbol] = {}
         self.dyld_rebased_pointers: Dict[VirtualMemoryPointer, VirtualMemoryPointer] = {}
-
+        self.chained_fixups_type = 0
         if self._dyld_chained_fixups:
             rebases, binds = DyldInfoParser.parse_chained_fixups(self)  # type: ignore
             self.dyld_rebased_pointers, self.dyld_bound_symbols = rebases, binds
@@ -287,6 +288,7 @@ class MachoBinary:
             ncmds: Number of load commands to parse, as declared by the header's ncmds field
         """
         self.load_dylib_commands = []
+        self.reexport_load_dylib_commands = []
 
         for i in range(ncmds):
             load_command = self.read_struct(offset, MachoLoadCommandStruct)
@@ -321,6 +323,10 @@ class MachoBinary:
             elif load_command.cmd in [MachoLoadCommands.LC_LOAD_DYLIB, MachoLoadCommands.LC_LOAD_WEAK_DYLIB]:
                 dylib_load_command = self.read_struct(offset, DylibCommandStruct)
                 self.load_dylib_commands.append(dylib_load_command)
+
+            elif load_command.cmd == MachoLoadCommands.LC_REEXPORT_DYLIB:
+                dylib_load_command = self.read_struct(offset, DylibCommandStruct)
+                self.reexport_load_dylib_commands.append(dylib_load_command)
 
             elif load_command.cmd == MachoLoadCommands.LC_CODE_SIGNATURE:
                 self._code_signature_cmd = self.read_struct(offset, MachoLinkeditDataCommandStruct)
@@ -655,9 +661,9 @@ class MachoBinary:
         if not section_name:
             return None
         # some sections will never contain a string literal and can cause errors if we try to read a string from them
-        if section_name in ["__bss", "__objc_selrefs", "__objc_classrefs"]:
-            return None
-        # special case if this is a __cfstring entry
+#       there is a bug in section_name_for_address, it returns as a forbidden section despite being a section with string. For a quick fix we just remove the exclusions.
+#        if section_name in ["__bss", "__objc_selrefs", "__objc_classrefs"]:
+#            return None
         if section_name == "__cfstring":
             # read bytes into CFString struct
             cfstring_ent = self.read_struct_with_rebased_pointers(address, CFStringStruct, virtual=True)
@@ -820,7 +826,7 @@ class MachoBinary:
         if self._dyld_info:
             return self._dyld_info
         else:
-            raise LoadCommandMissingError()
+            return []
 
     @property
     def code_signature_cmd(self) -> Optional[MachoLinkeditDataCommandStruct]:

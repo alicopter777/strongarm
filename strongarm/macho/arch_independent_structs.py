@@ -40,7 +40,10 @@ from strongarm.macho.macho_definitions import (
     ObjcDataRaw64,
     ObjcIvar32,
     ObjcIvar64,
+    ObjcPropertie32,
+    ObjcPropertie64,
     ObjcIvarList,
+    ObjcPropertiesList,
     ObjcMethod32,
     ObjcMethod64,
     ObjcMethodList,
@@ -297,6 +300,10 @@ class ObjcIvarStruct(ArchIndependentStructure):
     _32_BIT_STRUCT = ObjcIvar32
     _64_BIT_STRUCT = ObjcIvar64
 
+class ObjcPropertieStruct(ArchIndependentStructure):
+    _32_BIT_STRUCT = ObjcPropertie32
+    _64_BIT_STRUCT = ObjcPropertie64
+
 
 class CFStringStruct(ArchIndependentStructure):
     _32_BIT_STRUCT = CFString32
@@ -312,6 +319,9 @@ class ObjcIvarListStruct(ArchIndependentStructure):
     _32_BIT_STRUCT = ObjcIvarList
     _64_BIT_STRUCT = ObjcIvarList
 
+class ObjcPropertieListStruct(ArchIndependentStructure):
+    _32_BIT_STRUCT = ObjcPropertiesList
+    _64_BIT_STRUCT = ObjcPropertiesList
 
 class DylibCommandStruct(ArchIndependentStructure):
     _32_BIT_STRUCT = DylibCommand

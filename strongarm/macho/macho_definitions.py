@@ -606,6 +606,9 @@ class ObjcMethodList(Structure):
 class ObjcIvarList(Structure):
     _fields_ = [("entsize", c_uint32), ("count", c_uint32)]
 
+class ObjcPropertiesList(Structure):
+    _fields_ = [("entsize", c_uint32), ("count", c_uint32)]
+
 
 class ObjcProtocolList32(Structure):
     _fields_ = [("count", c_uint32)]
@@ -649,6 +652,17 @@ class ObjcIvar64(Structure):
         ("size", c_uint32),
     ]
 
+class ObjcPropertie64(Structure):
+    _fields_ = [
+        ("name", c_uint64),
+        ("attributes", c_uint64),
+    ]
+
+class ObjcPropertie32(Structure):
+    _fields_ = [
+        ("name", c_uint32),
+        ("attributes", c_uint32),
+    ]
 
 class LcStrUnion(Union):
     _fields_ = [("offset", c_uint32), ("ptr", c_char_p)]

@@ -8,6 +8,8 @@ from strongarm.macho.arch_independent_structs import (
     ObjcClassRawStruct,
     ObjcDataRawStruct,
     ObjcIvarListStruct,
+    ObjcPropertieListStruct,
+    ObjcPropertieStruct,
     ObjcIvarStruct,
     ObjcMethodListStruct,
     ObjcMethodStruct,
@@ -16,6 +18,8 @@ from strongarm.macho.arch_independent_structs import (
 )
 from strongarm.macho.macho_binary import MachoBinary
 from strongarm.macho.macho_definitions import VirtualMemoryPointer
+
+from strongarm.macho.macho_definitions import StaticFilePointer
 
 logger = strongarm_logger.getChild(__file__)
 
@@ -38,13 +42,13 @@ class ObjcSelref:
 
 
 class ObjcSelector:
-    __slots__ = ["name", "selref", "implementation", "is_external_definition"]
+    __slots__ = ["name", "name_offset", "selref", "implementation", "is_external_definition"]
 
-    def __init__(self, name: str, selref: Optional[ObjcSelref], implementation: Optional[VirtualMemoryPointer]) -> None:
+    def __init__(self, name: str, name_offset: Optional[StaticFilePointer], selref: Optional[ObjcSelref], implementation: Optional[VirtualMemoryPointer]) -> None:
         self.name = name
         self.selref = selref
         self.implementation = implementation
-
+        self.name_offset = name_offset
         self.is_external_definition = not self.implementation
 
     def __str__(self) -> str:
@@ -57,22 +61,38 @@ class ObjcSelector:
 
 
 class ObjcIvar:
-    __slots__ = ["name", "class_name", "field_offset", "field_offset_addr"]
+    __slots__ = ["name", "name_offset", "name_offset_offset" ,"class_name", "field_offset", "field_offset_addr"]
 
-    def __init__(self, name: str, class_name: str, offset: int, field_offset_addr: VirtualMemoryPointer):
+    def __init__(self, name: str, name_offset: StaticFilePointer, name_offset_offset: StaticFilePointer, class_name: str, offset: int, field_offset_addr: VirtualMemoryPointer):
         self.name = name
         self.class_name = class_name
         self.field_offset = offset
         self.field_offset_addr = field_offset_addr
+        self.name_offset = name_offset
+        self.name_offset_offset = name_offset_offset
 
     def __str__(self) -> str:
         return f"<@ivar {self.class_name}* {self.name}, off @ {self.field_offset}>"
 
     __repr__ = __str__
 
+class ObjcPropertie:
+    __slots__ = ["name" ,"name_offset", "name_offset_offset" , "attributes"]
+
+    def __init__(self, name: str, name_offset: StaticFilePointer, name_offset_offset: StaticFilePointer, attributes: str):
+        self.name = name
+        self.attributes = attributes
+        self.name_offset = name_offset
+        self.name_offset_offset = name_offset_offset
+
+
+    def __str__(self) -> str:
+        return f"<@basePropertie {self.name}, attributes @ {self.attributes}>"
+
+    __repr__ = __str__
 
 class ObjcClass:
-    __slots__ = ["raw_struct", "name", "selectors", "ivars", "protocols", "super_classref", "superclass_name"]
+    __slots__ = ["raw_struct", "name", "selectors", "ivars", "protocols", "baseProperties", "super_classref", "name_offset", "name_offset_offset", "classref_ptr", "metaclass_name_offset_offset", "superclass_name", "is_swift"]
 
     def __init__(
         self,
@@ -81,16 +101,28 @@ class ObjcClass:
         selectors: List[ObjcSelector],
         ivars: List[ObjcIvar] = None,
         protocols: List["ObjcProtocol"] = None,
+        baseProperties: List[ObjcPropertie] = None,
         super_classref: Optional[VirtualMemoryPointer] = None,
+        name_offset: Optional[StaticFilePointer] = None,
+        name_offset_offset: Optional[StaticFilePointer] = None,
+        classref_ptr : Optional[StaticFilePointer] = None,
+        metaclass_name_offset_offset: Optional[StaticFilePointer] = None,
         superclass_name: Optional[str] = None,
+        is_swift: Optional[bool] = None,
     ) -> None:
         self.name = name
         self.selectors = selectors
         self.raw_struct = raw_struct
         self.ivars = ivars if ivars else []
         self.protocols = protocols if protocols else []
+        self.baseProperties = baseProperties if baseProperties else []
         self.super_classref = super_classref
+        self.name_offset = name_offset
+        self.name_offset_offset = name_offset_offset
+        self.classref_ptr = classref_ptr
+        self.metaclass_name_offset_offset = metaclass_name_offset_offset
         self.superclass_name = superclass_name
+        self.is_swift = is_swift
 
     def __str__(self) -> str:
         return f"ObjcClass({self.name} : {self.superclass_name})"
@@ -107,7 +139,7 @@ class ObjcProtocol(ObjcClass):
 
 
 class ObjcCategory(ObjcClass):
-    __slots__ = ["raw_struct", "name", "base_class", "category_name", "selectors", "ivars", "protocols"]
+    __slots__ = ["raw_struct", "name", "base_class", "category_name", "selectors", "ivars", "protocols", "baseProperties"]
 
     def __init__(
         self,
@@ -117,6 +149,7 @@ class ObjcCategory(ObjcClass):
         selectors: List[ObjcSelector],
         ivars: List[ObjcIvar] = None,
         protocols: List[ObjcProtocol] = None,
+        baseProperties: List[ObjcPropertie] = None,
     ) -> None:
         self.base_class = base_class
         self.category_name = category_name
@@ -124,7 +157,7 @@ class ObjcCategory(ObjcClass):
         # ObjcCategory.name includes the base class + the cat-name
         # That way, callers don't need to check the ObjcClass instance type to get the 'right' value
         full_name = f"{base_class} ({category_name})"
-        super().__init__(raw_struct, full_name, selectors, ivars, protocols)
+        super().__init__(raw_struct, full_name, selectors, ivars, protocols, baseProperties)
 
     def __str__(self) -> str:
         return f"ObjcCategory({self.base_class} ({self.category_name}))"
@@ -154,7 +187,7 @@ class ObjcRuntimeDataParser:
         # This populates self._classrefs_to_objc_classes
         self.classes = self._parse_class_and_category_info()
         self.protocols = self._parse_global_protocol_info()
-
+        self.selectors = list(self.selrefs_to_selectors().values())
         logger.debug("Step 3: Resolving symbol name to source dylib map...")
         self._sym_to_dylib_path = self._parse_linked_dylib_symbols()
 
@@ -186,7 +219,6 @@ class ObjcRuntimeDataParser:
 
             library_ordinal = self._library_ordinal_from_n_desc(sym.n_desc)
             source_name = self.binary.dylib_name_for_library_ordinal(library_ordinal)
-
             syms_to_dylib_path[symbol_name] = source_name
         return syms_to_dylib_path
 
@@ -215,6 +247,7 @@ class ObjcRuntimeDataParser:
         for selref_ptr, selector_literal_ptr in selref_pointers.items():
             # Read selector string literal from selref pointer
             selector_string = self.binary.get_full_string_from_start_address(selector_literal_ptr)
+            name_offset = self.binary.file_offset_for_virtual_address(VirtualMemoryPointer(selector_literal_ptr))
             if not selector_string:
                 # But all selectors should have a name
                 # TODO(PT): Is this an error?
@@ -227,7 +260,7 @@ class ObjcRuntimeDataParser:
 
             # And start off the selref pointer -> selector map
             # We don't know the implementation address yet but it will be updated when we parse method lists
-            self._selref_ptr_to_selector_map[selref_ptr] = ObjcSelector(selector_string, wrapped_selref, None)
+            self._selref_ptr_to_selector_map[selref_ptr] = ObjcSelector(selector_string, name_offset, wrapped_selref, None)
 
     def selector_for_selref(self, selref_addr: VirtualMemoryPointer) -> Optional[ObjcSelector]:
         # This map contains selectors implemented in the binary
@@ -279,38 +312,42 @@ class ObjcRuntimeDataParser:
         parsed_objc_classes = []
         classlist_pointers = self._get_classlist_pointers()
         for ptr in classlist_pointers:
-            objc_class = self._get_objc_class_from_classlist_pointer(ptr)
+            objc_class, is_swift = self._get_objc_class_from_classlist_pointer(ptr)
             if objc_class:
                 parsed_class = None
                 # parse the instance method list
                 objc_data_struct = self._get_objc_data_from_objc_class(objc_class)
                 if objc_data_struct:
                     # the class's associated struct __objc_data contains the method list
-                    parsed_class = self._parse_objc_data_entry(objc_class, objc_data_struct)
+                    parsed_class = self._parse_objc_data_entry(objc_class, objc_data_struct, ptr)
 
                 # parse the metaclass if it exists
                 # the class stores instance methods and the metaclass's method list contains class methods
                 # the metaclass has the same name as the actual class
-                metaclass = self._get_objc_class_from_classlist_pointer(VirtualMemoryPointer(objc_class.metaclass))
+                metaclass, _ = self._get_objc_class_from_classlist_pointer(VirtualMemoryPointer(objc_class.metaclass))
                 if metaclass:
                     objc_data_struct = self._get_objc_data_from_objc_class(metaclass)
                     if objc_data_struct:
-                        parsed_metaclass = self._parse_objc_data_entry(objc_class, objc_data_struct)
+                        parsed_metaclass = self._parse_objc_data_entry(metaclass, objc_data_struct, VirtualMemoryPointer(objc_class.metaclass))
                         if parsed_class:
                             # add in selectors from the metaclass to the real class
                             parsed_class.selectors += parsed_metaclass.selectors
+                            parsed_class.metaclass_name_offset_offset = parsed_metaclass.name_offset_offset
                         else:
                             # no base class found, set the base class to the metaclass
+                            print("cant parse class, using metaclass: " + parsed_metaclass.name)
                             parsed_class = parsed_metaclass
 
                 # sanity check
                 # ensure we either found a class or metaclass
                 if not parsed_class:
                     raise RuntimeError(f"Failed to parse classref {hex(ptr)}")
+                parsed_class.is_swift = is_swift
                 parsed_objc_classes.append(parsed_class)
                 self._classrefs_to_objc_classes[ptr] = parsed_class
 
         return parsed_objc_classes
+
 
     def _parse_objc_categories(self) -> List[ObjcCategory]:
         logger.debug("Cross referencing __objc_catlist, __objc_category, and __objc_data entries...")
@@ -341,7 +378,6 @@ class ObjcRuntimeDataParser:
         """
         # For efficiency, build a map of (struct address -> class name)
         addr_to_class_names = {x.raw_struct.binary_offset: x.name for x in classes}
-
         for objc_class_or_category in classes:
             raw_struct = objc_class_or_category.raw_struct
             # This method uses the fact that `struct __objc_data.superclass` and `struct __objc_category.base_class`
@@ -355,7 +391,8 @@ class ObjcRuntimeDataParser:
                 base_class_name = imported_base_class_sym.name
 
             else:
-                dereferenced_classref = VirtualMemoryPointer(self.binary.read_word(base_class_field_addr))
+                #swift classes refrences seems to be signed while the objective c ones are not
+                dereferenced_classref = VirtualMemoryPointer(self.binary.read_word(base_class_field_addr) & 0x00000FFFFFFFFFF)
                 # The base class is implemented in this binary, and we should have a corresponding ObjcClass object.
                 if dereferenced_classref in addr_to_class_names:
                     base_class_name = addr_to_class_names[dereferenced_classref]
@@ -364,7 +401,8 @@ class ObjcRuntimeDataParser:
                         f"Failed to find a corresponding ObjC class for ref {dereferenced_classref} from "
                         f"{objc_class_or_category}"
                     )
-                    base_class_name = "$_Unknown_Class"
+                    #this is more in line with otool then just the string "unknown class"
+                    base_class_name = str(dereferenced_classref)
 
             if isinstance(objc_class_or_category, ObjcCategory):
                 objc_class_or_category.base_class = base_class_name
@@ -389,6 +427,9 @@ class ObjcRuntimeDataParser:
             ivar_struct = self.binary.read_struct_with_rebased_pointers(ivar_struct_ptr, ObjcIvarStruct, virtual=True)
 
             ivar_name = self.binary.get_full_string_from_start_address(ivar_struct.name)
+            name_offset = self.binary.file_offset_for_virtual_address(VirtualMemoryPointer(ivar_struct.name))
+            #The name is the second field in the struct so the offset to the name offset is the offset to the struct + sizeof the first field
+            name_offset_offset = self.binary.file_offset_for_virtual_address(VirtualMemoryPointer(ivar_struct_ptr + sizeof(c_uint64)))
             class_name = self.binary.get_full_string_from_start_address(ivar_struct.type)
             field_offset_addr = ivar_struct.offset_ptr
             # SCAN-2960: offset_ptr may be zero. Observed for the $defaultActor ivar within a Swift source class.
@@ -400,11 +441,36 @@ class ObjcRuntimeDataParser:
             if not ivar_name:
                 raise ValueError(f"Failed to read ivar data for ivar entry @ {hex(ivar_struct_ptr)}")
 
-            ivar = ObjcIvar(ivar_name, class_name, field_offset, field_offset_addr)  # type: ignore
+            ivar = ObjcIvar(ivar_name, name_offset, name_offset_offset, class_name, field_offset, field_offset_addr)  # type: ignore
             ivars.append(ivar)
 
             ivar_struct_ptr += ivar_struct.sizeof
         return ivars
+
+    def read_base_properties_from_base_properties_ptr(self, proplist_ptr: VirtualMemoryPointer) -> List[ObjcPropertie]:
+        """Given the virtual address of an propertie list, return a List of each encoded ObjcPropertie."""
+        propertieslist = self.binary.read_struct(proplist_ptr, ObjcPropertieListStruct, virtual=True)
+        properties: List[ObjcPropertie] = []
+        # Parse each prop struct which follows the proplist
+        prop_struct_ptr = proplist_ptr + propertieslist.sizeof
+        for _ in range(propertieslist.count):
+            propertie_struct = self.binary.read_struct_with_rebased_pointers(prop_struct_ptr, ObjcPropertieStruct, virtual=True)
+            propertie_name = self.binary.get_full_string_from_start_address(propertie_struct.name)
+            attributes = self.binary.get_full_string_from_start_address(propertie_struct.attributes)
+            name_offset = self.binary.file_offset_for_virtual_address(VirtualMemoryPointer(propertie_struct.name))
+            #The name is the first field in the struct so the offset to the name offset is the offset to the struct
+            name_offset_offset = self.binary.file_offset_for_virtual_address(VirtualMemoryPointer(prop_struct_ptr))
+            
+
+            # propertie_name can be falsey ('' and 0), so don't include them in this sanity check
+            if not propertie_name:
+                raise ValueError(f"Failed to read propertie data for propertie entry @ {hex(prop_struct_ptr)}")
+
+            prop = ObjcPropertie(propertie_name, name_offset, name_offset_offset, attributes)
+            properties.append(prop)
+
+            prop_struct_ptr += propertie_struct.sizeof
+        return properties
 
     def read_selectors_from_methlist_ptr(self, methlist_ptr: VirtualMemoryPointer) -> List[ObjcSelector]:
         """Given the virtual address of a method list, return a List of ObjcSelectors encapsulating each method."""
@@ -426,7 +492,8 @@ class ObjcRuntimeDataParser:
             # attempt to find corresponding selref
             selref = self._selector_literal_ptr_to_selref_map.get(method_ent.name)
 
-            selector = ObjcSelector(symbol_name, selref, VirtualMemoryPointer(method_ent.implementation))
+            name_offset = self.binary.file_offset_for_virtual_address(VirtualMemoryPointer(method_ent.name))
+            selector = ObjcSelector(symbol_name, name_offset, selref, VirtualMemoryPointer(method_ent.implementation))
             selectors.append(selector)
 
             # save this selector in the selref pointer -> selector map
@@ -473,6 +540,7 @@ class ObjcRuntimeDataParser:
 
         selectors: List[ObjcSelector] = []
         protocols: List[ObjcProtocol] = []
+        properties: List[ObjcPropertie] = []
 
         # The class-name will be overwritten later in the parse. See self._add_superclass_or_base_class_name_to_classes
         placeholder_class_name = (
@@ -489,19 +557,25 @@ class ObjcRuntimeDataParser:
             # TODO(PT): perhaps these should be combined into one call
             protocol_pointers = self._protolist_ptr_to_protocol_ptr_list(objc_category_struct.base_protocols)
             protocols += self._parse_protocol_ptr_list(protocol_pointers)
+        if objc_category_struct.instance_properties:
+            properties += self.read_base_properties_from_base_properties_ptr(objc_category_struct.instance_properties)
 
-        return ObjcCategory(objc_category_struct, placeholder_class_name, symbol_name, selectors, protocols=protocols)
+        return ObjcCategory(objc_category_struct, placeholder_class_name, symbol_name, selectors, protocols=protocols, baseProperties=properties)
 
     def _parse_objc_data_entry(
-        self, objc_class_struct: ObjcClassRawStruct, objc_data_struct: ObjcDataRawStruct
+        self, objc_class_struct: ObjcClassRawStruct, objc_data_struct: ObjcDataRawStruct, classref_ptr: VirtualMemoryPointer
     ) -> ObjcClass:
         symbol_name = self.binary.get_full_string_from_start_address(objc_data_struct.name)
         if not symbol_name:
             raise ValueError(f"Could not get symbol name for {hex(objc_data_struct.name)}")
-
+        classref_offset = self.binary.file_offset_for_virtual_address(classref_ptr)
+        name_offset = self.binary.file_offset_for_virtual_address(VirtualMemoryPointer(objc_data_struct.name))
+        # The class name is the sixth member of the ObjcDataRaw64 struct (the one we care about), after four c_uint32 members and one c_uint64
+        name_offset_offset = self.binary.file_offset_for_virtual_address(VirtualMemoryPointer(objc_class_struct.data + sizeof(c_uint32) * 4 + sizeof(c_uint64) ))
         selectors: List[ObjcSelector] = []
         protocols: List[ObjcProtocol] = []
         ivars: List[ObjcIvar] = []
+        base_properties: List[ObjcPropertie] = []
         # if the class implements no methods, base_methods will be the null pointer
         if objc_data_struct.base_methods:
             selectors += self.read_selectors_from_methlist_ptr(objc_data_struct.base_methods)
@@ -513,7 +587,10 @@ class ObjcRuntimeDataParser:
         if objc_data_struct.ivars:
             ivars += self.read_ivars_from_ivarlist_ptr(objc_data_struct.ivars)
 
-        return ObjcClass(objc_class_struct, symbol_name, selectors, ivars, protocols, objc_class_struct.superclass)
+        if objc_data_struct.base_properties:
+            base_properties += self.read_base_properties_from_base_properties_ptr(objc_data_struct.base_properties)
+
+        return ObjcClass(objc_class_struct, symbol_name, selectors, ivars, protocols, base_properties, objc_class_struct.superclass, name_offset, name_offset_offset, classref_offset)
 
     def _protolist_ptr_to_protocol_ptr_list(self, protolist_ptr: VirtualMemoryPointer) -> List[VirtualMemoryPointer]:
         """Accepts the virtual address of an ObjcProtocolListStruct, and returns List of protocol pointers it refers to."""  # noqa: E501
@@ -566,7 +643,7 @@ class ObjcRuntimeDataParser:
         )
         return protocol_entry
 
-    def _get_objc_class_from_classlist_pointer(self, class_struct_pointer: VirtualMemoryPointer) -> ObjcClassRawStruct:
+    def _get_objc_class_from_classlist_pointer(self, class_struct_pointer: VirtualMemoryPointer) -> (ObjcClassRawStruct, bool):
         """Read a struct __objc_class from the location indicated by the __objc_classlist pointer."""
         class_entry = self.binary.read_struct_with_rebased_pointers(
             class_struct_pointer, ObjcClassRawStruct, virtual=True
@@ -575,9 +652,14 @@ class ObjcRuntimeDataParser:
         # sanitize class_entry
         # the least significant 2 bits are used for flags
         # flag 0x1 indicates a Swift class
+        # Actually  0x1 means swift legacy, 0x2 is swift stable. To be on the safe side lets do 0x3
         # mod data pointer to ignore flags!
+        if class_entry.data & 0x3:
+            is_swift = 1
+        else:
+            is_swift = 0
         class_entry.data &= ~0x3  # type: ignore
-        return class_entry
+        return class_entry, is_swift
 
     def _get_objc_data_from_objc_class(self, objc_class: ObjcClassRawStruct) -> Optional[ObjcDataRawStruct]:
         """Read a struct __objc_data from a provided struct __objc_class
